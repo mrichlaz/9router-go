@@ -73,6 +73,14 @@ const (
 // ErrorRules is the ordered list of error classification rules, matching Next.js ERROR_RULES.
 // Checked top-to-bottom: text rules first (by order), then status rules.
 var ErrorRules = []ErrorRule{
+	// A CodeBuddy intl account-level risk-control block (11140 "request
+	// illegal" with a restricted display message) does not clear on a short
+	// cooldown, and re-picking the banned credential every two minutes is what
+	// inflates the block. It has to sit above the generic "11140" and
+	// "account has been restricted" rules further down, which would otherwise
+	// answer first with the 30-minute address cooldown: the display wording is
+	// the only safe signal, because 11140 also carries ordinary throttling.
+	{Provider: "codebuddy-intl", Text: "account restricted upstream", CooldownMs: cooldownAccountBan},
 	{Text: "11158", CooldownMs: cooldownLong},
 	{Text: "model_not_in_plan", CooldownMs: cooldownLong},
 	{Text: "当前账号类型暂不支持该模型", CooldownMs: cooldownLong},
@@ -108,13 +116,8 @@ var ErrorRules = []ErrorRule{
 	// off (upstream 3b137aa6): without a provider-scoped rule the messages
 	// fall through to the request-scoped 4xx path and the connection gets
 	// zero cooldown while its backoff level never moves.
-	//
-	// The ban rule must precede them: an account-level risk-control block
-	// (11140 "request illegal" with a restricted display message) does not
-	// clear on a short cooldown, and re-picking the banned credential every
-	// two minutes is what inflates the block. The wording is the only safe
-	// signal — 11140 also carries ordinary throttling, which stays on backoff.
-	{Provider: "codebuddy-intl", Text: "account restricted upstream", CooldownMs: cooldownAccountBan},
+	// The ban rule sits at the top of the list so it wins over the generic
+	// 11140 rules; the rest of the intl gateway's wordings only earn backoff.
 	{Provider: "codebuddy-intl", Text: "request illegal", Backoff: true},
 	{Provider: "codebuddy-intl", Text: "conversation id missing", Backoff: true},
 	// DeepSeek web account-level refusals both arrive as 403, and they are

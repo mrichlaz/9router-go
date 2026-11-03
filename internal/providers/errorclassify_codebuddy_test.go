@@ -91,10 +91,11 @@ func TestClassifyErrorForProvider_CodebuddyIntlAccountBan(t *testing.T) {
 		}
 	}
 
-	// The phrase is intl-only, and a plain 403 elsewhere keeps the generic
-	// two-minute rule.
-	if cls := ClassifyErrorForProvider(403, msg, 0, "openai"); cls.CooldownMs != cooldownLong {
-		t.Errorf("openai classified %+v, want the generic 403 cooldown (%dms)", cls, cooldownLong)
+	// The 2h park is intl-only. Everywhere else the same display wording
+	// still matches the generic risk-control rule and its 30-minute address
+	// cooldown — never the 2h park.
+	if cls := ClassifyErrorForProvider(403, msg, 0, "openai"); cls.CooldownMs != cooldownAddressRefused {
+		t.Errorf("openai classified %+v, want the generic risk-control cooldown (%dms)", cls, cooldownAddressRefused)
 	}
 	if cls := ClassifyErrorForProvider(403, msg, 0, "codebuddy-cn"); cls.CooldownMs == want {
 		t.Errorf("codebuddy-cn took the intl ban cooldown: %+v", cls)

@@ -89,27 +89,27 @@ func ForwardCodebuddyCN(w http.ResponseWriter, req *Request) error {
 	cfg := req.Config
 	intl := isCodebuddyIntlRequest(req, cfg)
 	if cfg != nil {
-		merged := make(map[string]string, len(cfg.StaticHeaders)+25)
+		base := make(map[string]string, len(cfg.StaticHeaders)+25)
 		for k, v := range cfg.StaticHeaders {
-			merged[k] = v
+			base[k] = v
 		}
-		delete(merged, "x-requested-with")
-		delete(merged, "x-codebuddy-request")
+		delete(base, "x-requested-with")
+		delete(base, "x-codebuddy-request")
 
-		if intl {
-			// Fail closed: a request without the family is refused by the
-			// gateway every time, so sending one anyway would be a 100%
-			// failure with no cause in the log.
-			if err := codebuddyIntlHeaders(merged, req, cfg); err != nil {
-				return fmt.Errorf("codebuddy channel verification: %w", err)
-			}
-		} else {
-			for k, v := range codebuddyHeaders(req, cfg, body) {
-				merged[k] = v
-			}
+		// Fail closed: a request without the family is refused by the gateway
+		// every time, so sending one anyway would be a 100% failure with no
+		// cause in the log.
+		baseCfg := *cfg
+		baseCfg.StaticHeaders = base
+		h, herr := codebuddyHeadersForChannel(req, &baseCfg, body)
+		if herr != nil {
+			return fmt.Errorf("codebuddy channel verification: %w", herr)
+		}
+		for k, v := range h {
+			base[k] = v
 		}
 		cfgCopy := *cfg
-		cfgCopy.StaticHeaders = merged
+		cfgCopy.StaticHeaders = base
 		cfg = &cfgCopy
 	}
 
@@ -512,28 +512,56 @@ func codebuddyIntlHeaders(bag map[string]string, req *Request, cfg *providers.Pr
 	return applyCodebuddyConversationHeaders(bag)
 }
 
-// codebuddyHeaders is the CN channel's full header set. Its conversation id is
-// derived from the session so retries and account failovers of one turn stay on
-// one conversation; the intl channel must not do this (see
-// applyCodebuddyConversationHeaders).
-func codebuddyHeaders(req *Request, cfg *providers.ProviderConfig, body []byte) map[string]string {
+// codebuddyHeadersForChannel is the full header set for whichever channel the
+// request targets: the intl desktop identity plus its UUID family, or the CN
+// CLI identity plus its session-derived conversation family. Only the CN
+// conversation id is derived from the session, so retries and account failovers
+// of one turn stay on one conversation (see applyCodebuddyConversationHeaders
+// for why the intl side must not do that). The intl error is the caller's to
+// report: a request without the family is refused upstream every time.
+func codebuddyHeadersForChannel(req *Request, cfg *providers.ProviderConfig, body []byte) (map[string]string, error) {
+	if isCodebuddyIntlRequest(req, cfg) {
+		bag := make(map[string]string, 32)
+		if cfg != nil {
+			for k, v := range cfg.StaticHeaders {
+				bag[k] = v
+			}
+		}
+		err := codebuddyIntlHeaders(bag, req, cfg)
+		applyCodebuddyCKKeyIdentity(bag, req)
+		return bag, err
+	}
+
 	h := codebuddyIdentityHeaders(req, cfg)
 	reqID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	h[codebuddyRequestIDHeader] = reqID
 	h[codebuddyConvIDHeader] = codebuddySessionConversationID(req, body)
 	h[codebuddyConvRequestIDHeader] = strings.ReplaceAll(uuid.NewString(), "-", "")
 	h[codebuddyConvMessageIDHeader] = reqID
-	if req != nil && strings.HasPrefix(req.APIKey, "ck_") {
-		// A ck_ key is a WorkBuddy desktop credential: the desktop client
-		// authenticates with the bearer token *and* X-API-Key, sends no
-		// X-Domain, and identifies the account instead of a numeric id.
-		h["Authorization"] = "Bearer " + req.APIKey
-		h["X-API-Key"] = req.APIKey
-		delete(h, "X-Domain")
-		h["X-User-Id"] = "anonymous_" + last8(req.APIKey)
-		h["X-IDE-Type"] = "WorkBuddy"
-		h["X-Agent-Runtime"] = "local-agent"
+	applyCodebuddyCKKeyIdentity(h, req)
+	return h, nil
+}
+
+// applyCodebuddyCKKeyIdentity is the ck_ credential's own header shape: a
+// WorkBuddy desktop key authenticates with the bearer token *and* X-API-Key,
+// sends no X-Domain, and identifies the account instead of a numeric id. It
+// holds on either channel, because the prefix names the client, not the host.
+func applyCodebuddyCKKeyIdentity(h map[string]string, req *Request) {
+	if req == nil || !strings.HasPrefix(req.APIKey, "ck_") {
+		return
 	}
+	h["Authorization"] = "Bearer " + req.APIKey
+	h["X-API-Key"] = req.APIKey
+	delete(h, "X-Domain")
+	h["X-User-Id"] = "anonymous_" + last8(req.APIKey)
+	h["X-IDE-Type"] = "WorkBuddy"
+	h["X-Agent-Runtime"] = "local-agent"
+}
+
+// codebuddyHeaders keeps the error-free signature for callers that only need a
+// best-effort set (diagnostics, probes).
+func codebuddyHeaders(req *Request, cfg *providers.ProviderConfig, body []byte) map[string]string {
+	h, _ := codebuddyHeadersForChannel(req, cfg, body)
 	return h
 }
 

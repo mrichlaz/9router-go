@@ -48,8 +48,8 @@ func TestCodebuddyIdentityFormats(t *testing.T) {
 	if len(id.HostID) != 32 || strings.Trim(id.HostID, "0123456789abcdef") != "" {
 		t.Errorf("hostId = %q, want 32 hex chars", id.HostID)
 	}
-	if id.CLIVersion != "2.133.1" {
-		t.Errorf("cliVersion = %q, want 2.133.1", id.CLIVersion)
+	if id.CLIVersion != "2.179.3" {
+		t.Errorf("cliVersion = %q, want 2.179.3", id.CLIVersion)
 	}
 }
 
