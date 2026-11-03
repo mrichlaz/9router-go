@@ -21,8 +21,14 @@ import (
 // fingerprint. The raw secret is never stored, logged, or sent.
 
 // codebuddyCLIVersion is the official CLI build this identity mimics.
-// Source: @tencent-ai/codebuddy-code product.json (CLI 2.133.1).
-const codebuddyCLIVersion = "2.133.1"
+// Source: @tencent-ai/codebuddy-code@2.179.3 product.json (platform CLI),
+// unpacked 2026-11-03. codebuddyCLINodeVersion is the node the launcher
+// downloads and verifies; codebuddyCLISDKVersion is the bundled OpenAI SDK.
+const (
+	codebuddyCLIVersion     = "2.179.3"
+	codebuddyCLINodeVersion = "v22.23.3"
+	codebuddyCLISDKVersion  = "7.39.0"
+)
 
 type codebuddyBuildInfo struct {
 	ReleaseDate int64
@@ -32,8 +38,8 @@ type codebuddyBuildInfo struct {
 // codebuddyBuild mirrors the ${PWD}/pluginStatus build fields of the official
 // client, kept in sync with the registry UA.
 var codebuddyBuild = codebuddyBuildInfo{
-	ReleaseDate: 1785400746436,
-	Commit:      "e9991e2be9dcafcce0fad23fc065dd91a7f3efed",
+	ReleaseDate: 1793640633882,
+	Commit:      "73cd55e3d7162b630bf8decafffee03c6fe858d1",
 }
 
 // codebuddyCredential contains the material identity is anchored to. Access

@@ -223,28 +223,44 @@ func (h *ChatHandler) handleAccountFallback(
 		// to a different account (force fallback), and the usage row, the logs
 		// and the exclusion below must all name the account that was dialled.
 		log.Debug("fallback", "connection", "conn", connObj.ID, "candidate", c.ID)
+		// One attempt at a time beyond the account's ceiling: a request that would
+		// exceed it moves to the next account here, before any upstream call is
+		// spent. Concurrency on one credential is the step between a per-model
+		// throttle and an account restriction.
+		releaseSlot, slotBusy := acquireConnectionSlot(provider, connObj.ID)
+		if slotBusy {
+			log.Info("fallback", "account at its in-flight ceiling, trying the next",
+				"provider", provider, "conn", connObj.ID, "limit", accountInFlightLimit(provider))
+			excludeIDs = append(excludeIDs, connObj.ID)
+			continue
+		}
 		attemptStart := time.Now()
-		if err := h.tryForwardWithConnection(forwardRequestParams{
-			Ctx: ctx, W: w, Provider: provider, Model: model,
-			ConnectionID: connObj.ID, ConnName: connObjName(connObj), ConnEmail: connObjEmail(connObj),
-			ConnData: connData, Body: body, Attempts: attemptCount(ctx),
-			IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
-		}); err == nil {
+		forwardErr := func() error {
+			// Released when the attempt ends, which for a stream is when the
+			// upstream body is fully copied to the client.
+			defer releaseSlot()
+			return h.tryForwardWithConnection(forwardRequestParams{
+				Ctx: ctx, W: w, Provider: provider, Model: model,
+				ConnectionID: connObj.ID, ConnName: connObjName(connObj), ConnEmail: connObjEmail(connObj),
+				ConnData: connData, Body: body, Attempts: attemptCount(ctx),
+				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
+			})
+		}()
+		if forwardErr == nil {
 			RecordAttemptFromContext(ctx, connObj.ID, connObjName(connObj), provider, model, 200, nil, time.Since(attemptStart).Milliseconds())
 			if sessionID := handlerutil.GetSessionID(ctx); sessionID != "" && affinityEligible {
 				h.getSessionAffinity().Bind(provider, model, sessionID, connObj.ID)
 			}
 			return nil
-		} else {
-			lastErr = err
-			observ.IncFallback(provider, model, observ.FallbackReasonUpstreamError)
-			RecordAttemptFromContext(ctx, connObj.ID, connObjName(connObj), provider, model, 0, err, time.Since(attemptStart).Milliseconds())
-			var ue *upstreamError
-			if errors.As(lastErr, &ue) {
-				if ue.StatusCode == http.StatusTooManyRequests || ue.StatusCode == http.StatusUnauthorized || ue.StatusCode == http.StatusForbidden {
-					if sessionID := handlerutil.GetSessionID(ctx); sessionID != "" {
-						h.getSessionAffinity().Evict(provider, model, sessionID)
-					}
+		}
+		lastErr = forwardErr
+		observ.IncFallback(provider, model, observ.FallbackReasonUpstreamError)
+		RecordAttemptFromContext(ctx, connObj.ID, connObjName(connObj), provider, model, 0, forwardErr, time.Since(attemptStart).Milliseconds())
+		var ue *upstreamError
+		if errors.As(lastErr, &ue) {
+			if ue.StatusCode == http.StatusTooManyRequests || ue.StatusCode == http.StatusUnauthorized || ue.StatusCode == http.StatusForbidden {
+				if sessionID := handlerutil.GetSessionID(ctx); sessionID != "" {
+					h.getSessionAffinity().Evict(provider, model, sessionID)
 				}
 			}
 		}
@@ -261,7 +277,6 @@ func (h *ChatHandler) handleAccountFallback(
 			continue
 		}
 
-		var ue *upstreamError
 		if errors.As(lastErr, &ue) && providers.IsModelDeprecation(ue.StatusCode, ue.Body) {
 			// A retired model fails on every account of this provider, so the
 			// remaining connections are skipped and the badge the operator
